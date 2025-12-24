@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+langserve
+langchain
+langchain-openai
+langgraph
+python-dotenv
+colorama
+sse_starlette

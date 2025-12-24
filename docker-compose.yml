@@ -1,0 +1,114 @@
+# ==================== Agents SaaS Platform Docker Compose ====================
+# 使用方法：
+#   启动所有服务：docker-compose up -d
+#   查看日志：docker-compose logs -f
+#   停止服务：docker-compose down
+#   重新构建：docker-compose up -d --build
+
+version: "3.8"
+
+services:
+  # -------------------- Django Backend --------------------
+  backend:
+    build:
+      context: ./agents-backend
+      dockerfile: Dockerfile
+    container_name: agents-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # 开发环境挂载代码目录，支持热重载
+      - ./agents-backend:/app
+      # 持久化数据库
+      - backend-data:/app/data
+    environment:
+      - DEBUG=True
+      - ALLOWED_HOSTS=*
+      - SECRET_KEY=your-secret-key-change-in-production
+      # API Keys - 请在 .env 文件中配置或直接修改
+      # - MODEL=gpt-3.5-turbo
+      # - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-your-api-key-here}
+    networks:
+      - agents-network
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/hello/')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # -------------------- LangGraph Agent Service --------------------
+  langraph:
+    build:
+      context: ./agents-langraph
+      dockerfile: Dockerfile
+    container_name: agents-langraph
+    ports:
+      - "5001:5001"
+    volumes:
+      # 开发环境挂载代码目录
+      - ./agents-langraph:/app
+    environment:
+      - MODEL=${MODEL:-Qwen/Qwen3-8B}
+      - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-your-api-key-here}
+    networks:
+      - agents-network
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:5001/docs')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # -------------------- React Frontend --------------------
+  frontend:
+    build:
+      context: ./agents-web
+      dockerfile: Dockerfile
+    container_name: agents-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+      - langraph
+    networks:
+      - agents-network
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost/",
+        ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+# -------------------- Networks --------------------
+networks:
+  agents-network:
+    driver: bridge
+
+# -------------------- Volumes --------------------
+volumes:
+  backend-data:
+    driver: local

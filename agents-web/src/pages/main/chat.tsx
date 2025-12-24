@@ -142,8 +142,10 @@ export default function AppChatPage() {
     // Special handling for "涉密研判助手" (ID: 2) - 使用 LangGraph 流式 API
     if (id === '2') {
       try {
+        const baseUrl =
+          import.meta.env.MODE === 'development' ? 'http://localhost:5001' : '';
         // LangGraph 流式 API 端点
-        const response = await fetch('http://localhost:5001/agent/stream', {
+        const response = await fetch(`${baseUrl}/agent/stream`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
