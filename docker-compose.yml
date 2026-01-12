@@ -8,26 +8,26 @@
 version: "3.8"
 
 services:
-  # -------------------- Django Backend --------------------
+  # -------------------- FastAPI Backend --------------------
   backend:
     build:
-      context: ./agents-backend
+      context: ./agents-backend-fastapi
       dockerfile: Dockerfile
     container_name: agents-backend
     ports:
       - "8000:8000"
     volumes:
       # 开发环境挂载代码目录，支持热重载
-      - ./agents-backend:/app
+      - ./agents-backend-fastapi:/app
       # 持久化数据库
       - backend-data:/app/data
     environment:
-      - DEBUG=True
-      - ALLOWED_HOSTS=*
-      - SECRET_KEY=your-secret-key-change-in-production
-      # API Keys - 请在 .env 文件中配置或直接修改
-      # - MODEL=gpt-3.5-turbo
-      # - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-your-api-key-here}
+      - H3C_AUTH_SERVICE_URL=http://h3c-auth:8000
+      - H3C_AUTH_JWT_SECRET_KEY=${H3C_AUTH_JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-your-api-key-here}
+      - DEFAULT_MODEL=${MODEL:-gpt-3.5-turbo}
+    depends_on:
+      - h3c-auth
     networks:
       - agents-network
     restart: unless-stopped
@@ -37,7 +37,36 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/hello/')",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # -------------------- h3c-auth Service --------------------
+  h3c-auth:
+    build:
+      context: ../h3c-auth
+      dockerfile: Dockerfile
+    container_name: h3c-auth
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./h3c-auth-data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///./data/auth.db
+      - SECRET_KEY=${H3C_AUTH_JWT_SECRET_KEY:-your-secret-key-change-in-production}
+    networks:
+      - agents-network
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/')",
         ]
       interval: 30s
       timeout: 10s
@@ -45,16 +74,16 @@ services:
       start_period: 10s
 
   # -------------------- LangGraph Agent Service --------------------
-  langraph:
+  langgraph:
     build:
-      context: ./agents-langraph
+      context: ./agents-langgraph
       dockerfile: Dockerfile
-    container_name: agents-langraph
+    container_name: agents-langgraph
     ports:
       - "5001:5001"
     volumes:
       # 开发环境挂载代码目录
-      - ./agents-langraph:/app
+      - ./agents-langgraph:/app
     environment:
       - MODEL=${MODEL:-Qwen/Qwen3-8B}
       - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-your-api-key-here}
@@ -84,7 +113,8 @@ services:
       - "80:80"
     depends_on:
       - backend
-      - langraph
+      - langgraph
+      - h3c-auth
     networks:
       - agents-network
     restart: unless-stopped
