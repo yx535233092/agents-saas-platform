@@ -14,8 +14,9 @@ def output(node_name, state, is_first=False):
     """
     if is_first:
         print("-" * 20)
+        doc_title = state.get("doc_title", "未知文件")
         print(
-            f"{Fore.GREEN}{Style.BRIGHT}开始检测文件: {Fore.YELLOW}{Style.BRIGHT}{state['doc_title']}{Style.RESET_ALL}"
+            f"{Fore.GREEN}{Style.BRIGHT}开始检测文件: {Fore.YELLOW}{Style.BRIGHT}{doc_title}{Style.RESET_ALL}"
         )
     else:
         print(

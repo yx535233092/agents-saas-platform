@@ -1,13 +1,9 @@
 """工作流图定义"""
 
-try:
-    # Python < 3.12 需使用 typing_extensions.TypedDict 以兼容 Pydantic v2
-    from typing_extensions import TypedDict
-except ImportError:
-    from typing import TypedDict
-
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 
+from confidential_judgement_agent.workflow.state import AnnotatedState
 from confidential_judgement_agent.workflow.nodes import (
     start_node,
     secret_analysis_node,
@@ -20,72 +16,112 @@ from confidential_judgement_agent.workflow.nodes import (
 )
 
 
-# 定义工作流状态
-class State(TypedDict):
-    """工作流状态定义"""
-    current_node: str  # 当前节点（用于路由）
-    doc_title: str  # 文件名
-    doc_content: str  # 摘要
-    scene: str  # 场景
-    is_sensitive: bool  # 是否涉密
-    evidence: str  # 证据链
-    secret_analysis_result: dict  # 秘密目录分析结果
-    public_analysis_result: dict  # 公开文件分析结果
-    confidence: int  # 置信度
+# ==================== 路由函数 ====================
 
 
-# 如果关键词检测到涉密内容，直接进入决策节点；否则，继续语义检测
-def route_after_secretlogo(state: State):
-    """秘标检测后的路由函数"""
-    is_sensitive = state.get("is_sensitive")
-    # 如果涉密，直接进入决策节点
+def route_after_secretlogo(state: AnnotatedState) -> str:
+    """
+    秘标检测后的路由函数
+
+    Args:
+        state: 工作流状态
+
+    Returns:
+        下一个节点的名称
+    """
+    is_sensitive = state.get("is_sensitive", False)
+
+    # 如果检测到秘标，直接进入决策节点
     if is_sensitive:
         return "agent_decision"
-    # 否则，继续深度语义检测
+
+    # 否则，继续深度语义检测流程
+    return "judgement_scene_node"
+
+
+def route_after_semantics(state: AnnotatedState) -> str:
+    """
+    语义分析后的路由函数（可选，用于更复杂的路由逻辑）
+
+    Args:
+        state: 工作流状态
+
+    Returns:
+        下一个节点的名称
+    """
+    # 可以根据分析结果决定是否跳过某些节点
+    # 当前实现：总是进入公开性分析
+    return "judgement_public_content_node"
+
+
+# ==================== 工作流图构建 ====================
+
+
+def create_workflow(checkpoint: bool = False):
+    """
+    创建工作流图
+
+    Args:
+        checkpoint: 是否启用检查点（用于状态持久化和恢复）
+
+    Returns:
+        编译后的工作流应用
+    """
+    # 创建状态图
+    workflow = StateGraph(AnnotatedState)
+
+    # 添加节点
+    workflow.add_node("start_node", start_node)
+    workflow.add_node("judgement_secretlogo_node", judgement_secretlogo_node)
+    workflow.add_node("judgement_scene_node", judgement_scene_node)
+    workflow.add_node(
+        "judgement_secret_directory_node", judgement_secret_directory_node
+    )
+    workflow.add_node("judgement_public_content_node", judgement_public_content_node)
+    workflow.add_node("agent_semantics", secret_analysis_node)
+    workflow.add_node("agent_non_secret_proof", public_analysis_node)
+    workflow.add_node("agent_decision", decision_review_node)
+
+    # 设置入口点
+    workflow.set_entry_point("start_node")
+
+    # 添加边（线性流程）
+    workflow.add_edge("start_node", "judgement_secretlogo_node")
+
+    # 条件边：根据秘标检测结果路由
+    workflow.add_conditional_edges(
+        "judgement_secretlogo_node",
+        route_after_secretlogo,
+        {
+            "agent_decision": "agent_decision",  # 检测到秘标，直接决策
+            "judgement_scene_node": "judgement_scene_node",  # 未检测到，继续流程
+        },
+    )
+
+    # 继续正常流程
+    workflow.add_edge("judgement_scene_node", "judgement_secret_directory_node")
+    workflow.add_edge(
+        "judgement_secret_directory_node", "judgement_public_content_node"
+    )
+    workflow.add_edge("judgement_public_content_node", "agent_decision")
+
+    # 结束
+    workflow.add_edge("agent_decision", END)
+
+    # 编译工作流
+    if checkpoint:
+        # 启用检查点（用于生产环境的状态持久化）
+        memory = MemorySaver()
+        app = workflow.compile(checkpointer=memory)
     else:
-        return "agent_semantics"
+        # 不使用检查点（用于简单场景）
+        app = workflow.compile()
+
+    return app
 
 
-# 工作流
-workflow = StateGraph(State)
-workflow.add_node("start_node", start_node)
-workflow.add_node("judgement_scene_node", judgement_scene_node)
-workflow.add_node("judgement_secret_directory_node", judgement_secret_directory_node)
-workflow.add_node("judgement_public_content_node", judgement_public_content_node)
+# 创建默认工作流实例（不启用检查点）
+app = create_workflow(checkpoint=False)
 
-workflow.add_node("agent_semantics", secret_analysis_node)
-workflow.add_node("agent_non_secret_proof", public_analysis_node)
-workflow.add_node("agent_decision", decision_review_node)
-workflow.add_node("judgement_secretlogo_node", judgement_secretlogo_node)
-
-# 设定启动节点
-workflow.set_entry_point("start_node")
-
-# 工作流边定义
-# 第一步：秘标检测
-# workflow.add_edge("start_node", "judgement_secretlogo_node")
-# # 第二步：秘标检测后的条件路由
-# workflow.add_conditional_edges(
-#     "judgement_secretlogo_node",
-#     route_after_secretlogo,
-#     {
-#         "agent_decision": "agent_decision",  # 如果检测到秘标，直接决策
-#         "agent_semantics": "agent_semantics",  # 否则继续深度语义检测
-#     },
-# )
-# # 第三步：深度语义检测
-# workflow.add_edge("agent_semantics", "agent_non_secret_proof")
-# # 第四步：非涉密证明
-# workflow.add_edge("agent_non_secret_proof", "agent_decision")
-# # 第五步：决策评审
-# workflow.add_edge("agent_decision", END)
-
-workflow.add_edge("start_node", "judgement_scene_node")
-workflow.add_edge("judgement_scene_node", "judgement_secret_directory_node")
-workflow.add_edge("judgement_secret_directory_node", "judgement_public_content_node")
-workflow.add_edge("judgement_public_content_node", "agent_decision")
-workflow.add_edge("agent_decision", END)
-
-# 编译工作流
-app = workflow.compile()
-
+# 如果需要启用检查点，可以这样创建：
+# app_with_checkpoint = create_workflow(checkpoint=True)
