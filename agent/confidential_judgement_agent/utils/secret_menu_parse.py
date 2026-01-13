@@ -1,15 +1,29 @@
+"""秘密目录解析工具"""
+
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-import os
+
+from confidential_judgement_agent.config import get_settings
+
+settings = get_settings()
 
 
-# 秘密目录LLM判别
 def secret_menu_parse(scene, doc_content):
+    """
+    秘密目录LLM判别
+
+    Args:
+        scene: 场景配置
+        doc_content: 文档内容
+
+    Returns:
+        判别结果（JSON字符串）
+    """
     llm = ChatOpenAI(
-        model=os.getenv("MODEL"),
-        base_url="https://api.siliconflow.cn/v1",
-        api_key=os.getenv("SILICONFLOW_API_KEY"),
-        temperature=0,
+        model=settings.MODEL,
+        base_url=settings.LLM_BASE_URL,
+        api_key=settings.SILICONFLOW_API_KEY,
+        temperature=settings.LLM_TEMPERATURE,
     )
 
     scene_describe_detail = ""
@@ -50,3 +64,4 @@ def secret_menu_parse(scene, doc_content):
         {"doc_content": doc_content, "scene_describe_detail": scene_describe_detail}
     ).content
     return response
+

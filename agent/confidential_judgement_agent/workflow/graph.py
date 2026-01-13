@@ -1,9 +1,14 @@
+"""工作流图定义"""
+
 try:
     # Python < 3.12 需使用 typing_extensions.TypedDict 以兼容 Pydantic v2
     from typing_extensions import TypedDict
 except ImportError:
     from typing import TypedDict
-from nodes import (
+
+from langgraph.graph import StateGraph, END
+
+from confidential_judgement_agent.workflow.nodes import (
     start_node,
     secret_analysis_node,
     public_analysis_node,
@@ -13,11 +18,11 @@ from nodes import (
     judgement_secret_directory_node,
     judgement_public_content_node,
 )
-from langgraph.graph import StateGraph, END
 
 
 # 定义工作流状态
 class State(TypedDict):
+    """工作流状态定义"""
     current_node: str  # 当前节点（用于路由）
     doc_title: str  # 文件名
     doc_content: str  # 摘要
@@ -31,6 +36,7 @@ class State(TypedDict):
 
 # 如果关键词检测到涉密内容，直接进入决策节点；否则，继续语义检测
 def route_after_secretlogo(state: State):
+    """秘标检测后的路由函数"""
     is_sensitive = state.get("is_sensitive")
     # 如果涉密，直接进入决策节点
     if is_sensitive:
@@ -51,9 +57,11 @@ workflow.add_node("agent_semantics", secret_analysis_node)
 workflow.add_node("agent_non_secret_proof", public_analysis_node)
 workflow.add_node("agent_decision", decision_review_node)
 workflow.add_node("judgement_secretlogo_node", judgement_secretlogo_node)
+
 # 设定启动节点
 workflow.set_entry_point("start_node")
 
+# 工作流边定义
 # 第一步：秘标检测
 # workflow.add_edge("start_node", "judgement_secretlogo_node")
 # # 第二步：秘标检测后的条件路由
@@ -80,3 +88,4 @@ workflow.add_edge("agent_decision", END)
 
 # 编译工作流
 app = workflow.compile()
+

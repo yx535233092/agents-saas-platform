@@ -26,6 +26,6 @@ EXPOSE 5001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5001/docs')" || exit 1
 
-# 启动命令
-CMD ["uvicorn", "serve:app", "--host", "0.0.0.0", "--port", "5001"]
+# 启动命令（默认运行 SSE API）
+CMD ["python", "main.py", "sse"]
 

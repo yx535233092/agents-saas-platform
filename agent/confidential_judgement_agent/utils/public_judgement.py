@@ -1,14 +1,28 @@
+"""公开性判别工具"""
+
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-import os
+
+from confidential_judgement_agent.config import get_settings
+
+settings = get_settings()
 
 
 def public_judgement(doc_content):
+    """
+    公开性判别函数
+
+    Args:
+        doc_content: 文档内容
+
+    Returns:
+        判别结果（JSON字符串）
+    """
     llm = ChatOpenAI(
-        model=os.getenv("MODEL"),
-        base_url="https://api.siliconflow.cn/v1",
-        api_key=os.getenv("SILICONFLOW_API_KEY"),
-        temperature=0,
+        model=settings.MODEL,
+        base_url=settings.LLM_BASE_URL,
+        api_key=settings.SILICONFLOW_API_KEY,
+        temperature=settings.LLM_TEMPERATURE,
     )
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -19,20 +33,20 @@ def public_judgement(doc_content):
                 你是一名资深的【政府信息公开核查员】及【保密安全审计专家】，擅长通过文本特征识别公文的密级与公开属性。
 
                 # 背景
-                我需要你审核一段文本内容，判断其是否属于“可直接向社会公开”的文件。原始数据可能来自内部数据库或抓取的零散文档，可能存在格式残缺。
+                我需要你审核一段文本内容，判断其是否属于"可直接向社会公开"的文件。原始数据可能来自内部数据库或抓取的零散文档，可能存在格式残缺。
 
                 # 任务
-                根据【待审文本】，严格按照思维链步骤，判定该文件是“公开文件”还是“非公开/内部/涉密文件”。
+                根据【待审文本】，严格按照思维链步骤，判定该文件是"公开文件"还是"非公开/内部/涉密文件"。
 
                 # 推理步骤
                 在给出结论前，请在内部按以下路径进行分析，并记录在 evidence 字段中：
-                1. **文号与标识检索**：检查是否有“公报”、“公告”、“通知”、“第[X]号”等典型公开文号；检查是否有“绝密”、“机密”、“秘密”或“内部资料”等字样。
-                2. **发布主体与渠道分析**：识别落款单位。该单位是否常态化向社会发布此类信息？文中是否提到“现予公布”、“欢迎监督”等面向公众的措辞？
+                1. **文号与标识检索**：检查是否有"公报"、"公告"、"通知"、"第[X]号"等典型公开文号；检查是否有"绝密"、"机密"、"秘密"或"内部资料"等字样。
+                2. **发布主体与渠道分析**：识别落款单位。该单位是否常态化向社会发布此类信息？文中是否提到"现予公布"、"欢迎监督"等面向公众的措辞？
                 3. **内容敏感度评估**：内容是否涉及国家秘密、军事部署、未经授权的事故调查过程（非结果）、体制改革内情等敏感领域。
                 4. **公开性推定**：如果文中包含明确的执行日期、面向不特定公众的指令、或已在政府公报刊登的引用，则倾向于判断为公开。
 
                 # 约束
-                - 必须识别隐晦特征（如：虽然没有密标，但涉及“不准外传”等要求的视为非公开）。
+                - 必须识别隐晦特征（如：虽然没有密标，但涉及"不准外传"等要求的视为非公开）。
                 - 输出必须是严格的 JSON 格式，方便后端程序解析。
 
                 # 格式要求
@@ -52,3 +66,4 @@ def public_judgement(doc_content):
     chain = prompt | llm
     response = chain.invoke({"doc_content": doc_content}).content
     return response
+
