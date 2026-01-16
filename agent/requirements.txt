@@ -9,3 +9,4 @@ colorama
 sse_starlette
 pandas
 typing_extensions
+httpx

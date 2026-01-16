@@ -28,6 +28,7 @@ app.add_middleware(
 
 class CheckRequest(BaseModel):
     """检查请求模型"""
+
     doc_title: str
     doc_content: str
 
@@ -112,42 +113,64 @@ async def generate_sse_stream(
                         }
                     yield f"data: {json.dumps({'type': 'progress', 'node': 'judgement_public_content_node', 'data': public_result}, ensure_ascii=False)}\n\n"
 
-        # 发送决策评审开始消息
-        yield f"data: {json.dumps({'type': 'progress', 'node': 'agent_decision', 'data': {'status': 'started'}}, ensure_ascii=False)}\n\n"
+        # 检查是否是秘标匹配的情况（已经在工作流中处理完成）
+        evidence = current_state.get("evidence", "")
+        is_sensitive = current_state.get("is_sensitive", False)
+        is_secretlogo_match = is_sensitive and (
+            "秘标" in evidence
+            or "秘标匹配" in evidence
+            or "judgement_secretlogo_node" in evidence
+            or "秘标：" in evidence
+        )
 
-        # 执行决策评审（流式输出）
-        # 使用 nodes.py 中的流式函数
-        state_copy = current_state.copy()
-        tokens = []  # 收集所有 token
-
-        def token_callback(token):
-            """收集 token 的回调函数"""
-            tokens.append(token)
-
-        # 调用决策评审节点（流式版本）
-        updated_state = decision_review_node(state_copy, token_callback=token_callback)
-
-        # 流式发送收集到的 token
-        for token in tokens:
-            stream_data = {
-                "type": "stream_token",
-                "node": "agent_decision",
-                "token": token,
+        # 如果是秘标匹配，工作流已经处理完成，直接使用结果，不再调用决策节点
+        if is_secretlogo_match:
+            # 秘标匹配已经在工作流中处理完成，直接使用当前状态的结果
+            decision_result = {
+                "is_sensitive": current_state.get("is_sensitive", False),
+                "evidence": current_state.get("evidence", ""),
+                "confidence": current_state.get("confidence", 100),
+                "current_node": "END",
             }
-            yield f"data: {json.dumps(stream_data, ensure_ascii=False)}\n\n"
+            # 发送决策评审完成消息（秘标匹配，已处理完成）
+            yield f"data: {json.dumps({'type': 'progress', 'node': 'agent_decision', 'data': decision_result}, ensure_ascii=False)}\n\n"
+        else:
+            # 发送决策评审开始消息
+            yield f"data: {json.dumps({'type': 'progress', 'node': 'agent_decision', 'data': {'status': 'started'}}, ensure_ascii=False)}\n\n"
 
-        # 更新状态
-        current_state.update(updated_state)
+            # 执行决策评审（流式输出）
+            # 使用 nodes.py 中的流式函数
+            state_copy = current_state.copy()
+            tokens = []  # 收集所有 token
 
-        decision_result = {
-            "is_sensitive": current_state.get("is_sensitive", False),
-            "evidence": current_state.get("evidence", ""),
-            "confidence": current_state.get("confidence", 0),
-            "current_node": "END",
-        }
+            def token_callback(token):
+                """收集 token 的回调函数"""
+                tokens.append(token)
 
-        # 发送决策评审完成消息
-        yield f"data: {json.dumps({'type': 'progress', 'node': 'agent_decision', 'data': decision_result}, ensure_ascii=False)}\n\n"
+            # 调用决策评审节点（流式版本）
+            updated_state = decision_review_node(state_copy, token_callback=token_callback)
+
+            # 流式发送收集到的 token
+            for token in tokens:
+                stream_data = {
+                    "type": "stream_token",
+                    "node": "agent_decision",
+                    "token": token,
+                }
+                yield f"data: {json.dumps(stream_data, ensure_ascii=False)}\n\n"
+
+            # 更新状态
+            current_state.update(updated_state)
+
+            decision_result = {
+                "is_sensitive": current_state.get("is_sensitive", False),
+                "evidence": current_state.get("evidence", ""),
+                "confidence": current_state.get("confidence", 0),
+                "current_node": "END",
+            }
+
+            # 发送决策评审完成消息
+            yield f"data: {json.dumps({'type': 'progress', 'node': 'agent_decision', 'data': decision_result}, ensure_ascii=False)}\n\n"
 
         # 发送最终结果
         final_data = {
@@ -199,4 +222,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host=settings.API_HOST, port=settings.API_PORT)
-

@@ -8,8 +8,12 @@ import {
   ArrowLeft,
   MoreHorizontal,
   Eraser,
+  Loader2,
   Database,
-  Loader2
+  Play,
+  History,
+  X,
+  Trash2
 } from 'lucide-react';
 import { ChatMessage, type Message } from '@/components/chat/chat-message';
 import {
@@ -21,6 +25,20 @@ import {
 import { getApplication } from '@/services/applications';
 import { callApplicationAPI } from '@/utils/app-api';
 import type { Application } from '@/types/application';
+import { databaseConfigService } from '@/services/database-configs';
+import type { DatabaseConfig } from '@/types/database-config';
+import {
+  chatHistoryService,
+  type ChatHistoryListItem
+} from '@/services/chat-history';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 // import { useAuthStore } from '@/stores/auth';
 
 // 格式化节点输出为可读内容
@@ -186,9 +204,43 @@ export default function AppChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setLoading] = useState(false);
-  const [isBatchProcessing, setBatchProcessing] = useState(false);
-  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 批处理相关状态
+  const [batchDialogOpen, setBatchDialogOpen] = useState(false);
+  const [databaseConfigs, setDatabaseConfigs] = useState<DatabaseConfig[]>([]);
+  const [selectedDbConfigId, setSelectedDbConfigId] = useState<number | null>(
+    null
+  );
+  const [tableName, setTableName] = useState('test');
+  const [isBatchProcessing, setBatchProcessing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({
+    current: 0,
+    total: 0,
+    success: 0,
+    failed: 0
+  });
+
+  // 历史记录相关状态
+  const [historySidebarOpen, setHistorySidebarOpen] = useState(false);
+  const [histories, setHistories] = useState<ChatHistoryListItem[]>([]);
+  const [loadingHistories, setLoadingHistories] = useState(false);
+  const [currentHistoryId, setCurrentHistoryId] = useState<number | null>(null);
+
+  // 加载数据库配置列表
+  useEffect(() => {
+    const fetchDbConfigs = async () => {
+      try {
+        // 获取所有数据库配置（包括未启用的）
+        const configs = await databaseConfigService.list();
+        setDatabaseConfigs(Array.isArray(configs) ? configs : []);
+        console.log('加载的数据库配置:', configs);
+      } catch (error) {
+        console.error('获取数据库配置失败:', error);
+      }
+    };
+    fetchDbConfigs();
+  }, []);
 
   // 加载应用配置
   useEffect(() => {
@@ -226,6 +278,25 @@ export default function AppChatPage() {
     fetchApp();
   }, [id]);
 
+  // 加载历史记录列表
+  useEffect(() => {
+    if (!app || app.app_type !== 'secret_judgement') return;
+
+    const fetchHistories = async () => {
+      setLoadingHistories(true);
+      try {
+        const data = await chatHistoryService.list(app.id, { limit: 50 });
+        setHistories(Array.isArray(data) ? data : []);
+      } catch (error) {
+        console.error('获取历史记录失败:', error);
+      } finally {
+        setLoadingHistories(false);
+      }
+    };
+
+    fetchHistories();
+  }, [app]);
+
   useEffect(() => {
     // Auto scroll to bottom
     if (scrollRef.current) {
@@ -233,11 +304,62 @@ export default function AppChatPage() {
     }
   }, [messages]);
 
+  // 自动保存历史记录（仅涉密研判智能体）
+  useEffect(() => {
+    if (!app || app.app_type !== 'secret_judgement' || isLoading) return;
+
+    const currentMessages = messages.filter((m) => m.id !== '0'); // 排除欢迎消息
+    if (currentMessages.length < 2) return; // 至少需要用户消息和AI回复
+
+    // 防抖：延迟保存
+    const timer = setTimeout(async () => {
+      try {
+        const userMessages = currentMessages.filter((m) => m.role === 'user');
+        const lastUserMessage = userMessages[userMessages.length - 1];
+
+        if (!lastUserMessage) return;
+
+        if (currentHistoryId) {
+          // 更新现有历史记录
+          await chatHistoryService.update(currentHistoryId, {
+            messages: currentMessages.map((m) => ({
+              id: m.id,
+              role: m.role,
+              content: m.content,
+              timestamp: m.timestamp
+            }))
+          });
+        } else {
+          // 创建新历史记录
+          const history = await chatHistoryService.create({
+            application_id: app.id,
+            user_input: lastUserMessage.content,
+            messages: currentMessages.map((m) => ({
+              id: m.id,
+              role: m.role,
+              content: m.content,
+              timestamp: m.timestamp
+            }))
+          });
+          setCurrentHistoryId(history.id);
+          // 刷新历史记录列表
+          const data = await chatHistoryService.list(app.id, { limit: 50 });
+          setHistories(Array.isArray(data) ? data : []);
+        }
+      } catch (error) {
+        console.error('保存历史记录失败:', error);
+      }
+    }, 2000); // 延迟2秒保存，避免频繁保存
+
+    return () => clearTimeout(timer);
+  }, [messages, app, currentHistoryId, isLoading]);
+
   const handleSend = async () => {
     if (!input.trim() || isLoading || !app) return;
 
+    const userMsgId = Date.now().toString();
     const userMsg: Message = {
-      id: Date.now().toString(),
+      id: userMsgId,
       role: 'user',
       content: input,
       timestamp: Date.now()
@@ -418,6 +540,63 @@ export default function AppChatPage() {
     } finally {
       setLoading(false);
     }
+
+    // 保存历史记录（仅涉密研判智能体，在消息更新后）
+    if (app?.app_type === 'secret_judgement') {
+      setTimeout(async () => {
+        try {
+          const currentMessages = messages.filter((m) => m.id !== '0'); // 排除欢迎消息
+          if (currentMessages.length === 0) return;
+
+          // 获取用户输入（最后一条用户消息）
+          const userMessages = currentMessages.filter((m) => m.role === 'user');
+          const lastUserMessage = userMessages[userMessages.length - 1];
+
+          if (!lastUserMessage) return;
+
+          // 获取最新的消息列表（包括刚发送的消息）
+          const allMessages = [
+            ...currentMessages,
+            {
+              id: userMsgId,
+              role: 'user' as const,
+              content: input,
+              timestamp: Date.now()
+            }
+          ];
+
+          if (currentHistoryId) {
+            // 更新现有历史记录
+            await chatHistoryService.update(currentHistoryId, {
+              messages: allMessages.map((m) => ({
+                id: m.id,
+                role: m.role,
+                content: m.content,
+                timestamp: m.timestamp
+              }))
+            });
+          } else {
+            // 创建新历史记录
+            const history = await chatHistoryService.create({
+              application_id: app.id,
+              user_input: input,
+              messages: allMessages.map((m) => ({
+                id: m.id,
+                role: m.role,
+                content: m.content,
+                timestamp: m.timestamp
+              }))
+            });
+            setCurrentHistoryId(history.id);
+            // 刷新历史记录列表
+            const data = await chatHistoryService.list(app.id, { limit: 50 });
+            setHistories(Array.isArray(data) ? data : []);
+          }
+        } catch (error) {
+          console.error('保存历史记录失败:', error);
+        }
+      }, 1000); // 延迟1秒确保消息已更新
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -427,30 +606,29 @@ export default function AppChatPage() {
     }
   };
 
-  // 批处理函数（仅用于涉密研判智能体）
+  // 批处理函数
   const handleBatchProcess = async () => {
-    if (
-      isBatchProcessing ||
-      isLoading ||
-      !app ||
-      app.app_type !== 'secret_judgement'
-    )
+    if (!app || !selectedDbConfigId || isBatchProcessing) {
       return;
+    }
 
     setBatchProcessing(true);
-    setBatchProgress({ current: 0, total: 0 });
+    setBatchProgress({ current: 0, total: 0, success: 0, failed: 0 });
 
     try {
-      // 1. 从后端获取数据库数据
-      const baseUrl = import.meta.env.VITE_API_URL || '/api';
-      const response = await fetch(`${baseUrl}/test-db/`);
-      if (!response.ok) {
-        throw new Error('获取数据库数据失败');
-      }
-      const result = await response.json();
-      const dbData = result.data || [];
+      // 1. 从数据库获取数据
+      const queryResult = await databaseConfigService.queryData(
+        selectedDbConfigId,
+        {
+          table_name: tableName
+        }
+      );
 
-      if (dbData.length === 0) {
+      if (
+        !queryResult.success ||
+        !queryResult.data ||
+        queryResult.data.length === 0
+      ) {
         setMessages((prev) => [
           ...prev,
           {
@@ -461,143 +639,145 @@ export default function AppChatPage() {
           }
         ]);
         setBatchProcessing(false);
+        setBatchDialogOpen(false);
         return;
       }
 
-      setBatchProgress({ current: 0, total: dbData.length });
+      const dbData = queryResult.data;
+      setBatchProgress({
+        current: 0,
+        total: dbData.length,
+        success: 0,
+        failed: 0
+      });
 
       // 2. 添加批处理开始消息
       const batchStartMsg: Message = {
         id: `batch-start-${Date.now()}`,
         role: 'assistant',
-        content: `## 📊 开始批处理\n\n共 ${dbData.length} 条数据待处理...\n\n`,
+        content: `## 📊 开始批处理\n\n共 ${dbData.length} 条数据待处理，使用并发处理...\n\n`,
         timestamp: Date.now()
       };
       setMessages((prev) => [...prev, batchStartMsg]);
+      setBatchDialogOpen(false);
 
-      // 3. 依次处理每条数据
-      for (let i = 0; i < dbData.length; i++) {
-        const item = dbData[i];
-        const docContent = item['摘要'] || '';
-        const fileName = item['文件名'] || `记录 ${i + 1}`;
+      // 3. 并发处理数据（使用 Promise.allSettled 并发执行）
+      const concurrency = 5; // 并发数
+      const results: Array<{
+        success: boolean;
+        index: number;
+        data: Record<string, unknown>;
+        error?: string;
+        fileName?: string;
+      }> = [];
 
-        if (!docContent.trim()) {
-          continue;
-        }
+      for (let i = 0; i < dbData.length; i += concurrency) {
+        const batch = dbData.slice(i, i + concurrency);
+        const batchPromises = batch.map(
+          async (item: Record<string, unknown>, batchIndex: number) => {
+            const globalIndex = i + batchIndex;
+            const docContent =
+              item['全文'] || item['摘要'] || item['doc_content'] || '';
+            const fileName =
+              item['文件名'] || item['doc_title'] || `记录 ${globalIndex + 1}`;
 
-        setBatchProgress({ current: i + 1, total: dbData.length });
-
-        // 添加当前处理项的用户消息
-        const userMsg: Message = {
-          id: `batch-user-${i}-${Date.now()}`,
-          role: 'user',
-          content: `[批处理 ${i + 1}/${
-            dbData.length
-          }] ${fileName}\n\n${docContent}`,
-          timestamp: Date.now()
-        };
-        setMessages((prev) => [...prev, userMsg]);
-
-        // 调用应用API进行批处理
-        try {
-          const inputData = {
-            doc_title: fileName,
-            doc_content: docContent
-          };
-
-          const aiMsgId = `batch-ai-${i}-${Date.now()}`;
-          let fullContent = `### 📄 ${fileName}\n\n`;
-
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: aiMsgId,
-              role: 'assistant',
-              content: fullContent,
-              timestamp: Date.now()
-            }
-          ]);
-
-          await callApplicationAPI(
-            app,
-            inputData,
-            (progressData) => {
-              const event = progressData as {
-                type: string;
-                node?: string;
-                data?: unknown;
+            if (
+              !docContent ||
+              typeof docContent !== 'string' ||
+              !docContent.trim()
+            ) {
+              return {
+                success: false,
+                index: globalIndex,
+                data: item,
+                error: '内容为空'
               };
-              if (event.type === 'progress' && event.node) {
-                fullContent = formatNodeOutput(
-                  event.node,
-                  (event.data as Record<string, unknown>) || {},
-                  fullContent
-                );
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === aiMsgId ? { ...msg, content: fullContent } : msg
-                  )
-                );
-              } else if (event.type === 'final') {
-                const finalData = (event as { data?: unknown }).data as Record<
-                  string,
-                  unknown
-                >;
-                if (finalData) {
-                  fullContent = formatFinalResult(finalData, fullContent);
-                  setMessages((prev) =>
-                    prev.map((msg) =>
-                      msg.id === aiMsgId
-                        ? { ...msg, content: fullContent }
-                        : msg
-                    )
-                  );
-                }
-              }
-            },
-            (token) => {
-              fullContent += token;
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === aiMsgId ? { ...msg, content: fullContent } : msg
-                )
-              );
             }
-          );
 
-          // 添加分隔线
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `batch-separator-${i}-${Date.now()}`,
-              role: 'assistant',
-              content: '---\n\n',
-              timestamp: Date.now()
+            try {
+              const inputData = {
+                doc_title: fileName,
+                doc_content: docContent
+              };
+
+              // 调用智能体API（批处理时静默处理，不显示进度）
+              await callApplicationAPI(
+                app,
+                inputData,
+                undefined, // 不显示进度回调
+                undefined // 不显示token回调
+              );
+
+              return {
+                success: true,
+                index: globalIndex,
+                data: item,
+                fileName: String(fileName)
+              };
+            } catch (error) {
+              return {
+                success: false,
+                index: globalIndex,
+                data: item,
+                error: error instanceof Error ? error.message : '未知错误'
+              };
             }
-          ]);
-        } catch (error) {
-          console.error(`处理第 ${i + 1} 条数据时出错:`, error);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `batch-error-${i}-${Date.now()}`,
-              role: 'assistant',
-              content: `❌ 处理 "${fileName}" 时出错: ${
-                error instanceof Error ? error.message : '未知错误'
-              }\n\n`,
-              timestamp: Date.now()
-            }
-          ]);
-        }
+          }
+        );
+
+        const batchResults = await Promise.allSettled(batchPromises);
+        const settledResults = batchResults.map((result, idx) => {
+          if (result.status === 'fulfilled') {
+            return result.value;
+          } else {
+            return {
+              success: false,
+              index: i + idx,
+              data: batch[idx],
+              error: (result.reason as Error)?.message || '处理失败'
+            };
+          }
+        });
+
+        results.push(...settledResults);
+
+        // 更新进度
+        const successCount = results.filter((r) => r.success).length;
+        const failedCount = results.filter((r) => !r.success).length;
+        setBatchProgress({
+          current: results.length,
+          total: dbData.length,
+          success: successCount,
+          failed: failedCount
+        });
       }
 
-      // 4. 添加批处理完成消息
+      // 4. 添加批处理结果消息
+      const successCount = results.filter((r) => r.success).length;
+      const failedCount = results.filter((r) => !r.success).length;
+
+      let resultContent = `\n## ✅ 批处理完成\n\n`;
+      resultContent += `- 总计: ${dbData.length} 条\n`;
+      resultContent += `- 成功: ${successCount} 条\n`;
+      resultContent += `- 失败: ${failedCount} 条\n\n`;
+
+      if (failedCount > 0) {
+        resultContent += `### 失败记录:\n\n`;
+        results
+          .filter((r) => !r.success)
+          .forEach((r) => {
+            const fileName =
+              r.data['文件名'] || r.data['doc_title'] || `记录 ${r.index + 1}`;
+            resultContent += `- ${fileName}: ${r.error}\n`;
+          });
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           id: `batch-complete-${Date.now()}`,
           role: 'assistant',
-          content: `\n## ✅ 批处理完成\n\n共处理 ${dbData.length} 条数据。\n\n`,
+          content: resultContent,
           timestamp: Date.now()
         }
       ]);
@@ -616,7 +796,7 @@ export default function AppChatPage() {
       ]);
     } finally {
       setBatchProcessing(false);
-      setBatchProgress({ current: 0, total: 0 });
+      setBatchProgress({ current: 0, total: 0, success: 0, failed: 0 });
     }
   };
 
@@ -645,104 +825,356 @@ export default function AppChatPage() {
     );
   }
 
+  // 加载历史记录
+  const handleLoadHistory = async (historyId: number) => {
+    try {
+      const history = await chatHistoryService.get(historyId);
+      setMessages(history.messages as Message[]);
+      setCurrentHistoryId(historyId);
+    } catch (error) {
+      console.error('加载历史记录失败:', error);
+    }
+  };
+
+  // 删除历史记录
+  const handleDeleteHistory = async (
+    historyId: number,
+    e: React.MouseEvent
+  ) => {
+    e.stopPropagation();
+    if (!confirm('确定要删除这条历史记录吗？')) return;
+
+    try {
+      await chatHistoryService.delete(historyId);
+      setHistories((prev) => prev.filter((h) => h.id !== historyId));
+      if (currentHistoryId === historyId) {
+        setCurrentHistoryId(null);
+        setMessages([
+          {
+            id: '0',
+            role: 'assistant',
+            content: `你好！我是 **${app?.name || ''}**。\n\n${
+              app?.description || '请问有什么我可以帮你的吗？'
+            }`,
+            timestamp: Date.now()
+          }
+        ]);
+      }
+    } catch (error) {
+      console.error('删除历史记录失败:', error);
+    }
+  };
+
+  // 创建新对话
+  const handleNewChat = () => {
+    setCurrentHistoryId(null);
+    setMessages([
+      {
+        id: '0',
+        role: 'assistant',
+        content: `你好！我是 **${app?.name || ''}**。\n\n${
+          app?.description || '请问有什么我可以帮你的吗？'
+        }`,
+        timestamp: Date.now()
+      }
+    ]);
+    setHistorySidebarOpen(false);
+  };
+
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      {/* Chat Header */}
-      <header className="flex h-14 items-center justify-between border-b px-6">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate('/')}
-            className="flex items-center gap-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            <span>返回首页</span>
-          </Button>
-          <div>
-            <h1 className="text-base font-semibold">{app.name}</h1>
-            <p className="text-xs text-muted-foreground">{app.description}</p>
+    <div className="flex h-full overflow-hidden">
+      {/* 历史记录侧边栏 */}
+      {app?.app_type === 'secret_judgement' && (
+        <div
+          className={`${
+            historySidebarOpen ? 'w-64' : 'w-0'
+          } transition-all duration-300 border-r bg-sidebar overflow-hidden flex flex-col`}
+        >
+          <div className="flex h-14 items-center justify-between border-b px-4">
+            <h2 className="font-semibold">历史记录</h2>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setHistorySidebarOpen(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2">
+            <Button
+              variant="outline"
+              className="w-full mb-2"
+              onClick={handleNewChat}
+            >
+              <Send className="mr-2 h-4 w-4" />
+              新建对话
+            </Button>
+            {loadingHistories ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
+            ) : histories.length === 0 ? (
+              <div className="text-center text-sm text-muted-foreground py-8">
+                暂无历史记录
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {histories.map((history) => (
+                  <div
+                    key={history.id}
+                    className={`group relative rounded-md border p-3 cursor-pointer transition-colors hover:bg-sidebar-accent ${
+                      currentHistoryId === history.id
+                        ? 'bg-sidebar-accent border-primary'
+                        : ''
+                    }`}
+                    onClick={() => handleLoadHistory(history.id)}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {history.title || history.user_input || '未命名对话'}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {new Date(history.updated_at).toLocaleString('zh-CN')}
+                        </p>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={(e) => handleDeleteHistory(history.id, e)}
+                      >
+                        <Trash2 className="h-3 w-3 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
-        {app.app_type === 'secret_judgement' && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleBatchProcess}
-            disabled={isBatchProcessing || isLoading}
-            className="flex items-center gap-2"
-          >
-            <Database className="h-4 w-4" />
-            <span>
-              {isBatchProcessing
-                ? `批处理中 (${batchProgress.current}/${batchProgress.total})`
-                : '批处理数据库'}
-            </span>
-          </Button>
-        )}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon">
-              <MoreHorizontal className="h-5 w-5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => setMessages([messages[0]])}>
-              <Eraser className="mr-2 h-4 w-4" />
-              清除上下文
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </header>
+      )}
 
-      {/* Chat Area */}
-      <div className="flex-1 overflow-hidden">
-        <ScrollArea className="h-full px-4 py-4">
-          <div className="mx-auto max-w-3xl space-y-4">
-            {messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} />
-            ))}
-            {isLoading && (
-              <div className="flex w-full gap-4 p-4">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border shadow">
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      {/* 主内容区域 */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Chat Header */}
+        <header className="flex h-14 items-center justify-between border-b px-6">
+          <div className="flex items-center gap-4">
+            {app?.app_type === 'secret_judgement' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setHistorySidebarOpen(!historySidebarOpen)}
+                className="flex items-center gap-2"
+              >
+                <History className="h-4 w-4" />
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate('/')}
+              className="flex items-center gap-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>返回首页</span>
+            </Button>
+            <div>
+              <h1 className="text-base font-semibold">{app.name}</h1>
+              <p className="text-xs text-muted-foreground">{app.description}</p>
+            </div>
+          </div>
+          {app?.app_type === 'secret_judgement' && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBatchDialogOpen(true)}
+              disabled={isBatchProcessing || isLoading}
+              className="flex items-center gap-2"
+            >
+              <Database className="h-4 w-4" />
+              <span>
+                {isBatchProcessing
+                  ? `批处理中 (${batchProgress.current}/${batchProgress.total})`
+                  : '批处理数据库'}
+              </span>
+            </Button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon">
+                <MoreHorizontal className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setMessages([messages[0]])}>
+                <Eraser className="mr-2 h-4 w-4" />
+                清除上下文
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </header>
+
+        {/* Chat Area */}
+        <div className="flex-1 overflow-hidden">
+          <ScrollArea className="h-full px-4 py-4">
+            <div className="mx-auto max-w-3xl space-y-4">
+              {messages.map((msg) => (
+                <ChatMessage key={msg.id} message={msg} />
+              ))}
+              {isLoading && (
+                <div className="flex w-full gap-4 p-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border shadow">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  </div>
+                  <div className="flex items-center">
+                    <span className="text-sm text-muted-foreground">
+                      正在思考...
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center">
-                  <span className="text-sm text-muted-foreground">
-                    正在思考...
-                  </span>
+              )}
+              <div ref={scrollRef} />
+            </div>
+          </ScrollArea>
+        </div>
+
+        {/* Input Area */}
+        <div className="border-t bg-background p-4">
+          <div className="mx-auto flex max-w-3xl items-end gap-4 rounded-xl border bg-background p-3 shadow-sm focus-within:ring-1 focus-within:ring-ring">
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="输入您的问题..."
+              className="min-h-[100px] w-full resize-none border-0 bg-transparent p-3 shadow-none focus-visible:ring-0"
+              rows={4}
+            />
+            <Button
+              size="icon"
+              onClick={handleSend}
+              disabled={!input.trim() || isLoading}
+              className="shrink-0"
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            内容由 AI 生成，请仔细甄别。
+          </p>
+        </div>
+      </div>
+
+      {/* 批处理对话框 */}
+      <Dialog open={batchDialogOpen} onOpenChange={setBatchDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>批处理数据库</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="db-config">选择数据库配置 *</Label>
+              <select
+                id="db-config"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                value={selectedDbConfigId || ''}
+                onChange={(e) =>
+                  setSelectedDbConfigId(
+                    e.target.value ? Number(e.target.value) : null
+                  )
+                }
+              >
+                <option value="">
+                  {databaseConfigs.length === 0
+                    ? '暂无数据库配置，请先在后台管理中添加'
+                    : '请选择数据库配置'}
+                </option>
+                {databaseConfigs.map((config) => (
+                  <option key={config.id} value={config.id}>
+                    {config.name} ({config.db_type})
+                    {config.is_active ? '' : ' [未启用]'}
+                  </option>
+                ))}
+              </select>
+              {databaseConfigs.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  提示：请前往{' '}
+                  <a
+                    href="/admin/database-configs"
+                    target="_blank"
+                    className="text-primary underline"
+                  >
+                    数据库管理
+                  </a>{' '}
+                  页面添加数据库配置
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="table-name">表名</Label>
+              <input
+                id="table-name"
+                type="text"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                value={tableName}
+                onChange={(e) => setTableName(e.target.value)}
+                placeholder="test"
+              />
+            </div>
+            {isBatchProcessing && (
+              <div className="rounded-md border p-4">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>处理进度</span>
+                    <span>
+                      {batchProgress.current} / {batchProgress.total}
+                    </span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full bg-primary transition-all"
+                      style={{
+                        width: `${
+                          (batchProgress.current / batchProgress.total) * 100
+                        }%`
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>成功: {batchProgress.success}</span>
+                    <span>失败: {batchProgress.failed}</span>
+                  </div>
                 </div>
               </div>
             )}
-            <div ref={scrollRef} />
           </div>
-        </ScrollArea>
-      </div>
-
-      {/* Input Area */}
-      <div className="border-t bg-background p-4">
-        <div className="mx-auto flex max-w-3xl items-end gap-4 rounded-xl border bg-background p-3 shadow-sm focus-within:ring-1 focus-within:ring-ring">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="输入您的问题..."
-            className="min-h-[44px] w-full resize-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0"
-            rows={1}
-          />
-          <Button
-            size="icon"
-            onClick={handleSend}
-            disabled={!input.trim() || isLoading}
-            className="shrink-0"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
-        </div>
-        <p className="mt-2 text-center text-xs text-muted-foreground">
-          内容由 AI 生成，请仔细甄别。
-        </p>
-      </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setBatchDialogOpen(false)}
+              disabled={isBatchProcessing}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={handleBatchProcess}
+              disabled={!selectedDbConfigId || isBatchProcessing}
+            >
+              {isBatchProcessing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  处理中...
+                </>
+              ) : (
+                <>
+                  <Play className="mr-2 h-4 w-4" />
+                  开始批处理
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

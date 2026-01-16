@@ -11,6 +11,7 @@ import UserPage from '@/pages/admin/users';
 import RolePage from '@/pages/admin/roles';
 import ModelConfigsPage from '@/pages/admin/model-configs';
 import ApplicationsPage from '@/pages/admin/applications';
+import DatabaseConfigsPage from '@/pages/admin/database-configs';
 
 // 懒加载页面占位符
 const DeptPage = () => <div>部门管理</div>;
@@ -90,6 +91,10 @@ export const router = createBrowserRouter([
       {
         path: 'model-configs',
         element: <ModelConfigsPage />
+      },
+      {
+        path: 'database-configs',
+        element: <DatabaseConfigsPage />
       },
       {
         path: 'settings',

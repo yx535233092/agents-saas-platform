@@ -5,7 +5,7 @@ FastAPI主应用入口
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import engine, Base
-from app.api import applications
+from app.api import applications, test_db, database_configs, chat_history
 
 # 创建数据库表
 Base.metadata.create_all(bind=engine)
@@ -26,6 +26,9 @@ app.add_middleware(
 
 # 注册路由（路径已在router中定义，不需要额外前缀）
 app.include_router(applications.router)
+app.include_router(test_db.router)
+app.include_router(database_configs.router)
+app.include_router(chat_history.router)
 
 
 @app.get("/")

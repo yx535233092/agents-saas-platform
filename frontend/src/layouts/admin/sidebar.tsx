@@ -6,7 +6,8 @@ import {
   Building2,
   Lock,
   AppWindow,
-  Bot
+  Bot,
+  Database
 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils';
@@ -20,6 +21,7 @@ export function Sidebar() {
     { icon: Lock, label: '权限管理', href: '/admin/permissions' },
     { icon: AppWindow, label: '应用管理', href: '/admin/apps' },
     { icon: Bot, label: '模型配置', href: '/admin/model-configs' },
+    { icon: Database, label: '数据库管理', href: '/admin/database-configs' },
     { icon: Settings, label: '系统设置', href: '/admin/settings' }
   ];
 

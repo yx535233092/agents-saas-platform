@@ -25,6 +25,13 @@ class Settings:
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://api.siliconflow.cn/v1")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0"))
 
+    # 检索接口配置
+    RETRIEVAL_API_URL: str = os.getenv("RETRIEVAL_API_URL", "http://119.45.162.155/v1/chunk/retrieval_test")
+    RETRIEVAL_AUTHORIZATION: Optional[str] = os.getenv("RETRIEVAL_AUTHORIZATION", "IjQwZGQxNGY4ZTIyODExZjBiZDRlNTJlMzU3YWYyN2E0Ig.aU4yCA.AsCQmLk33K1PQFLb2XoF_Z9cobk")
+    RETRIEVAL_KB_ID: str = os.getenv("RETRIEVAL_KB_ID", "08a864acf29f11f0bd4e52e357af27a4")
+    RETRIEVAL_SEARCH_ID: str = os.getenv("RETRIEVAL_SEARCH_ID", "7c760ac2f2a111f0bd4e52e357af27a4")
+    RETRIEVAL_PAGE_SIZE: int = int(os.getenv("RETRIEVAL_PAGE_SIZE", "50"))
+
     # 静态文件路径
     STATIC_DIR: Path = BASE_DIR / "static"
     SECRET_MENU_PATH: Path = STATIC_DIR / "secret_menu.json"

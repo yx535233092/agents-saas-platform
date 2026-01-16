@@ -4,3 +4,7 @@ sqlalchemy==2.0.45
 pydantic==2.12.5
 httpx==0.28.1
 python-multipart==0.0.9
+# 数据库驱动（可选，根据需要安装）
+# psycopg2-binary==2.9.9  # PostgreSQL
+# pymysql==1.1.0  # MySQL
+# pyodbc==5.0.1  # MSSQL

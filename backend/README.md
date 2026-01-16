@@ -10,6 +10,7 @@
 - ✅ 应用连接测试功能
 - ✅ 支持多种 HTTP 方法和请求格式
 - ✅ 完整的请求验证和错误处理
+- ✅ 测试数据库连接和批量处理功能
 
 ## 安装依赖
 
@@ -52,7 +53,17 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `DELETE /api/applications/{id}/` - 删除应用
 - `POST /api/applications/{id}/test/` - 测试应用连接
 
+### 测试数据库
+
+- `GET /backend/test-db/` - 获取测试数据库中的所有数据（支持分页）
+- `GET /backend/test-db/count` - 获取测试数据库中的数据总数
+- `GET /backend/test-db/{record_id}` - 根据 ID 获取单条测试数据
+- `GET /backend/test-db/connection/test` - 测试数据库连接
+- `POST /backend/test-db/batch-process` - 批量处理数据（获取数据列表）
+
 ## 数据库
+
+### 应用数据库
 
 默认使用 SQLite 数据库（`applications.db`），可以通过环境变量 `DATABASE_URL` 修改。
 
@@ -61,6 +72,23 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```bash
 export DATABASE_URL="postgresql://user:password@localhost/dbname"
 ```
+
+### 测试数据库
+
+测试数据库用于存储测试文档数据，默认路径为 `db/test.db`。
+
+可以通过环境变量 `TEST_DB_PATH` 自定义测试数据库路径：
+
+```bash
+export TEST_DB_PATH="/path/to/your/test.db"
+```
+
+测试数据库应包含一个名为 `test` 的表，包含以下字段：
+- `id` (INTEGER PRIMARY KEY)
+- `文件名` (TEXT)
+- `摘要` (TEXT)
+- `全文` (TEXT)
+- 其他自定义字段...
 
 ## 项目结构
 
@@ -71,7 +99,8 @@ backend/
 │   ├── main.py              # FastAPI应用入口
 │   ├── core/
 │   │   ├── __init__.py
-│   │   └── database.py      # 数据库配置
+│   │   ├── database.py      # 应用数据库配置
+│   │   └── test_db.py       # 测试数据库连接和批量处理工具
 │   ├── models/
 │   │   ├── __init__.py
 │   │   └── application.py   # 应用数据模型
@@ -80,7 +109,8 @@ backend/
 │   │   └── application.py   # Pydantic模型
 │   └── api/
 │       ├── __init__.py
-│       └── applications.py  # 应用管理路由
+│       ├── applications.py  # 应用管理路由
+│       └── test_db.py        # 测试数据库 API 路由
 ├── requirements.txt
 └── README.md
 ```
